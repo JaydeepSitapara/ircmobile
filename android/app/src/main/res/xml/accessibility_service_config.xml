@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Accessibility service configuration for ReelsAccessibilityService.
+
+    KEY DECISIONS:
+      packageNames="com.instagram.android"
+        → The system only delivers events from Instagram. Events from all
+          other apps are never seen by this service. This is the most
+          privacy-respecting and battery-efficient configuration.
+
+      accessibilityEventTypes
+        → Only three event types are requested:
+            typeWindowStateChanged  — user navigates between Instagram screens
+            typeWindowContentChanged — content updates within a screen
+            typeViewScrolled         — user swipes to the next Reel
+
+      canRetrieveWindowContent="true"
+        → Required to inspect the accessibility node tree so we can
+          detect the Reels screen and generate Reel fingerprints.
+
+      notificationTimeout="100"
+        → Minimum interval (ms) between event deliveries. 100 ms provides
+          a good balance between responsiveness and CPU usage.
+
+    GOOGLE PLAY NOTE:
+      This configuration uses the minimum set of capabilities needed for
+      Reel transition detection. No other apps are observed. No automation
+      is performed on Instagram.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewScrolled"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagReportViewIds|flagIncludeNotImportantViews"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_service_description"
+    android:notificationTimeout="100"
+    android:packageNames="com.instagram.android"
+    android:settingsActivity=".MainActivity" />

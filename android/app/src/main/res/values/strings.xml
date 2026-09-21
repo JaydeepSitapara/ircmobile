@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Reels Counter</string>
+
+    <!--
+        Shown to the user in the Accessibility settings list.
+        Must clearly explain why this permission is needed.
+        Google Play requires this to be accurate and non-misleading.
+    -->
+    <string name="accessibility_service_description">
+        Reels Counter uses Accessibility access to detect when you move
+        from one Instagram Reel to the next, so it can count how many
+        Reels you watch each day.\n\n
+        This service only observes Instagram (com.instagram.android).
+        It does not read messages, passwords, or personal data from
+        any other app.\n\n
+        No data is sent to any server. All counts remain on your device.
+    </string>
+</resources>
