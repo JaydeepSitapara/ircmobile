@@ -48,7 +48,7 @@ class OverlayService private constructor(private val context: Context) {
     private var isOverlayEnabled: Boolean = false
 
     @Volatile
-    private var isReelsActive: Boolean = false
+    private var isInstagramActive: Boolean = false
 
     // ---------------------------------------------------------------------------
     // Public Control API
@@ -69,16 +69,28 @@ class OverlayService private constructor(private val context: Context) {
     fun isOverlayShowing(): Boolean = overlayView != null
 
     /**
-     * Called by ReelTrackingManager when user enters or exits the Reels screen.
+     * Called by ReelTrackingManager when Instagram comes to the foreground or goes away.
+     * The overlay is shown as soon as Instagram is open — we don't wait for Reels detection.
      */
-    fun onReelsScreenVisibilityChanged(reelsActive: Boolean) {
-        isReelsActive = reelsActive
+    fun onInstagramVisibilityChanged(active: Boolean) {
+        isInstagramActive = active
         if (TrackingConfig.DEBUG_LOGGING) {
-            Log.d(TAG, "[OverlayService] Reels screen visibility changed: active=$reelsActive")
+            Log.d(TAG, "[OverlayService] Instagram visibility changed: active=$active")
         }
         mainHandler.post {
             evaluateVisibility()
         }
+    }
+
+    /**
+     * Legacy compatibility: called by ReelTrackingManager when Reels screen is detected.
+     * Kept for any future use but no longer controls overlay visibility directly.
+     */
+    fun onReelsScreenVisibilityChanged(reelsActive: Boolean) {
+        if (TrackingConfig.DEBUG_LOGGING) {
+            Log.d(TAG, "[OverlayService] Reels screen visibility changed: active=$reelsActive")
+        }
+        // Overlay is already shown when Instagram is active — no extra action needed.
     }
 
     /**
@@ -95,7 +107,7 @@ class OverlayService private constructor(private val context: Context) {
     // ---------------------------------------------------------------------------
 
     private fun evaluateVisibility() {
-        val shouldShow = isOverlayEnabled && isReelsActive && hasOverlayPermission()
+        val shouldShow = isOverlayEnabled && isInstagramActive && hasOverlayPermission()
 
         if (shouldShow && overlayView == null) {
             attachOverlay()

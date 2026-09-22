@@ -53,6 +53,9 @@ class ReelTrackingManager(
     /** Last fingerprint that was emitted, exposed for debug UI. */
     private var lastEmittedFingerprint = ""
 
+    /** Timestamp of the last scroll-triggered Reel count. Used for debouncing. */
+    private var lastScrollTime = 0L
+
     /** When false, all processing is skipped (user disabled tracking in Settings). */
     var isTrackingEnabled: Boolean = true
         set(value) {
@@ -61,6 +64,7 @@ class ReelTrackingManager(
                 transitionTo(TrackingState.NOT_INSTAGRAM)
                 changeDetector.reset()
                 debouncer.reset()
+                lastScrollTime = 0L
                 log("Tracking disabled")
             }
         }
@@ -86,10 +90,11 @@ class ReelTrackingManager(
             if (state != TrackingState.NOT_INSTAGRAM) {
                 logVerbose("Left Instagram")
                 bridge.emitInstagramStatus(false)
-                overlayService?.onReelsScreenVisibilityChanged(false)
+                overlayService?.onInstagramVisibilityChanged(false)
                 transitionTo(TrackingState.NOT_INSTAGRAM)
                 changeDetector.reset()
                 debouncer.reset()
+                lastScrollTime = 0L
             }
             return
         }
@@ -99,62 +104,88 @@ class ReelTrackingManager(
             log("Instagram detected")
             bridge.emitInstagramStatus(true)
             transitionTo(TrackingState.INSTAGRAM_OPEN)
+            overlayService?.onInstagramVisibilityChanged(true)
         }
 
-        // Capture window title for screen detection Signal 1.
+        // Capture window title from TYPE_WINDOW_STATE_CHANGED.
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             lastWindowTitle = event.text?.firstOrNull()
             logVerbose("Window title: $lastWindowTitle")
         }
 
-        // ── Evaluate Reels screen confidence ─────────────────────────────────
+        // ── Primary path: TYPE_VIEW_SCROLLED → count the swipe directly ───────
+        // This is the most reliable signal that the user swiped to a new Reel.
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
+            handleScrollEvent(packageName!!)
+            return
+        }
+
+        // ── Secondary path: confidence-based Reels screen detection ──────────
+        // Only evaluate when rootNode is available (avoid dropping state on null)
+        if (rootNode == null) return
+
         val confidence = screenDetector.getConfidence(rootNode, lastWindowTitle)
         lastConfidence = confidence
         val onReels = confidence >= TrackingConfig.REELS_CONFIDENCE_THRESHOLD
 
         when {
-            // ── Left Reels screen ─────────────────────────────────────────────
             !onReels && (state == TrackingState.REELS_ACTIVE ||
                          state == TrackingState.WAITING_FOR_NEXT) -> {
                 log("Left Reels screen (confidence=$confidence)")
                 bridge.emitReelsScreenStatus(false)
-                overlayService?.onReelsScreenVisibilityChanged(false)
                 transitionTo(TrackingState.INSTAGRAM_OPEN)
                 changeDetector.reset()
             }
 
-            !onReels && state == TrackingState.POSSIBLE_REELS -> {
-                overlayService?.onReelsScreenVisibilityChanged(false)
-                transitionTo(TrackingState.INSTAGRAM_OPEN)
-            }
+            !onReels -> { /* still on a non-Reels screen — do nothing */ }
 
-            !onReels -> return   // still on a non-Reels screen — nothing to do
-
-            // ── Possible Reels (confidence = 1) ───────────────────────────────
-            confidence == 1 && state == TrackingState.INSTAGRAM_OPEN -> {
-                logVerbose("Possible Reels (confidence=1)")
-                transitionTo(TrackingState.POSSIBLE_REELS)
-            }
-
-            // ── Reels screen confirmed ─────────────────────────────────────────
             onReels -> {
                 if (state == TrackingState.INSTAGRAM_OPEN ||
                     state == TrackingState.POSSIBLE_REELS) {
                     log("Reels screen confirmed (confidence=$confidence)")
                     bridge.emitReelsScreenStatus(true)
-                    overlayService?.onReelsScreenVisibilityChanged(true)
                     transitionTo(TrackingState.REELS_ACTIVE)
                 }
-                evaluateReelChange(packageName!!, rootNode)
+                // On content changes also attempt fingerprint-based detection
+                // as a fallback when no scroll events are delivered.
+                evaluateReelChangeByFingerprint(packageName!!, rootNode)
             }
         }
     }
 
     // ---------------------------------------------------------------------------
-    // Reel change evaluation
+    // Primary: scroll-event-based Reel counting
     // ---------------------------------------------------------------------------
 
-    private fun evaluateReelChange(packageName: String, rootNode: AccessibilityNodeInfo?) {
+    private fun handleScrollEvent(packageName: String) {
+        val now = System.currentTimeMillis()
+
+        // Ensure we're at least in INSTAGRAM_OPEN state
+        if (state == TrackingState.NOT_INSTAGRAM) return
+
+        // Move to REELS_ACTIVE if we're on Instagram and get a scroll
+        if (state == TrackingState.INSTAGRAM_OPEN || state == TrackingState.POSSIBLE_REELS) {
+            log("Reels screen implied by scroll event")
+            bridge.emitReelsScreenStatus(true)
+            transitionTo(TrackingState.REELS_ACTIVE)
+        }
+
+        // Debounce: ignore scrolls within SCROLL_DEBOUNCE_MS of the last counted scroll
+        val timeSinceLast = now - lastScrollTime
+        if (lastScrollTime > 0 && timeSinceLast < TrackingConfig.SCROLL_DEBOUNCE_MS) {
+            logVerbose("Scroll debounced: ${timeSinceLast}ms since last count")
+            return
+        }
+
+        lastScrollTime = now
+        countNewReel(packageName, "scroll")
+    }
+
+    // ---------------------------------------------------------------------------
+    // Secondary: fingerprint-based Reel counting (fallback)
+    // ---------------------------------------------------------------------------
+
+    private fun evaluateReelChangeByFingerprint(packageName: String, rootNode: AccessibilityNodeInfo?) {
         val fingerprint = fingerprintGenerator.generate(rootNode)
 
         if (fingerprint.isEmpty()) {
@@ -162,34 +193,37 @@ class ReelTrackingManager(
             return
         }
 
-        // Two-step stabilisation: requires same fingerprint in two consecutive events.
+        // Require same fingerprint twice in a row to be stable
         val readyToCount = changeDetector.evaluate(fingerprint)
-
         if (!readyToCount) {
-            logVerbose("Fingerprint not yet stable or unchanged: $fingerprint")
+            logVerbose("Fingerprint unstable or unchanged: $fingerprint")
             return
         }
 
-        // Timing gate (secondary protection).
+        // Timing gate
         if (!debouncer.shouldProcess()) {
-            logVerbose("Debounce: event too soon after last count")
+            logVerbose("Debounce: too soon after last fingerprint count")
             return
         }
 
-        // ── New Reel confirmed ─────────────────────────────────────────────────
-        log("New Reel detected — fingerprint=$fingerprint confidence=$lastConfidence")
-        changeDetector.recordCounted(fingerprint)
         debouncer.recordProcessed()
-        lastEmittedFingerprint = fingerprint
+        countNewReel(packageName, "fingerprint:$fingerprint")
+        changeDetector.recordCounted(fingerprint)
+    }
 
-        // Increment native counter and update overlay
+    // ---------------------------------------------------------------------------
+    // Shared count-and-emit logic
+    // ---------------------------------------------------------------------------
+
+    private fun countNewReel(packageName: String, source: String) {
+        log("New Reel detected via $source")
+        lastEmittedFingerprint = source
+
         val countResult = counterManager?.increment()
         val todayCount = countResult?.todayCount ?: 0
         val totalCount = countResult?.totalCount ?: 0
 
-        if (countResult != null) {
-            overlayService?.updateCounter(todayCount)
-        }
+        overlayService?.updateCounter(todayCount)
 
         transitionTo(TrackingState.REEL_COUNTED)
 
@@ -197,14 +231,13 @@ class ReelTrackingManager(
             ReelDetectedEvent(
                 timestamp = countResult?.timestamp ?: System.currentTimeMillis(),
                 packageName = packageName,
-                fingerprint = fingerprint,
+                fingerprint = source,
                 detectionConfidence = lastConfidence
             ),
             todayCount = todayCount,
             totalCount = totalCount
         )
 
-        // Immediately return to REELS_ACTIVE so the next Reel can be detected.
         transitionTo(TrackingState.WAITING_FOR_NEXT)
         transitionTo(TrackingState.REELS_ACTIVE)
     }

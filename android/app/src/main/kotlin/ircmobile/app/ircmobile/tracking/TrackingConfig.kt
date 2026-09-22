@@ -10,12 +10,16 @@ import ircmobile.app.ircmobile.BuildConfig
 // ---------------------------------------------------------------------------
 object TrackingConfig {
 
-    /** Minimum milliseconds between counting two different Reels. Prevents
-     *  duplicate counts from rapid accessibility events for the same Reel. */
-    const val MIN_REEL_TRANSITION_INTERVAL_MS = 500L
+    /** Minimum milliseconds between counting two different Reels via scroll events.
+     *  800ms is enough time for a full swipe gesture to complete. */
+    const val MIN_REEL_TRANSITION_INTERVAL_MS = 800L
+
+    /** After a scroll-based count, how long to ignore further scroll events
+     *  to avoid double-counting a single swipe gesture. */
+    const val SCROLL_DEBOUNCE_MS = 1200L
 
     /** How many consecutive events must produce the same fingerprint before
-     *  we treat it as a stable, confirmed Reel. */
+     *  we treat it as a stable, confirmed Reel (content-change path only). */
     const val FINGERPRINT_STABILITY_THRESHOLD = 2
 
     /** Minimum confidence score (0–3) required to treat the current screen
@@ -24,10 +28,10 @@ object TrackingConfig {
 
     /** Maximum depth to traverse the accessibility node tree. Deep traversals
      *  are expensive; Instagram's relevant nodes are typically within 6 levels. */
-    const val MAX_NODE_TRAVERSE_DEPTH = 7
+    const val MAX_NODE_TRAVERSE_DEPTH = 8
 
     /** Maximum number of text tokens used to compute the Reel fingerprint. */
-    const val FINGERPRINT_NODE_LIMIT = 12
+    const val FINGERPRINT_NODE_LIMIT = 15
 
     /** Logcat tag used for all tracking-related log output. */
     const val DEBUG_LOG_TAG = "ReelTracker"
